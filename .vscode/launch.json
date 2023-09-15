@@ -21,7 +21,7 @@
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
-            "args": ["education.byu.edu", "-f", "./"],
+            "args": ["education.byu.edu", "-f", "./output.txt"],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal"
         }
