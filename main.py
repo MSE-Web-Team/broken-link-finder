@@ -2,6 +2,16 @@ import argparse
 import sys
 import os
 import requests
+import io
+
+# Selenium imports
+from selenium import webdriver
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+
+# BeautifulSoup
+from bs4 import BeautifulSoup
 
 """
 Validates the user's provided output file path. Returns true or false.
@@ -79,6 +89,36 @@ def url_separate(url):
     return base_url, endpoint
 
 """
+Finds all broken links on a page.
+"""
+def find_broken_links(start_url: str, console: bool, output_file: io.IOBase = None):
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument('--headless')
+    driver = webdriver.Chrome(options=chrome_options)
+
+    START_DOMAIN, start_endpoint = url_separate(start_url)
+
+    if console:
+        driver.get(start_url)
+        page_source = driver.page_source
+        soup = BeautifulSoup(page_source, 'html.parser')
+
+        anchor_tags = soup.find_all('a')
+        href_count = 0
+        broken_count = 0
+        for anchor in anchor_tags:
+            href = anchor.get('href')
+            if href is None:
+                continue
+            response = requests.head(href)
+            if response.status_code != 200:
+                print(f'Broken link: {href} (Status code: {response.status_code})')
+                broken_count += 1
+            href_count += 1
+        driver.close()
+        print(f'Looked at {href_count} links and found {broken_count} broken')
+
+"""
 Hub function for scraping the page/site provided. Should output to a file or console (depending
 on the arguments provided) one line at a time when broken links are found.
 """
@@ -91,14 +131,23 @@ def scrape(search_url: str, output_destination:str, recursive:bool, exclude:str)
     else:
         print("Paths excluded from search: None")
 
-    if output_destination != "console":
-        valid_out_dest = validate_output_file(output_destination)
+    valid_out_dest = validate_output_file(output_destination)
+    output_file = None
+    if output_destination != "console" and valid_out_dest:
         output_file = create_file(output_destination)
-        DOMAIN,start_endpoint = url_separate(search_url)
-
-        
+        find_broken_links(search_url, recursive, output_file)
+        output_file.close()
+    elif output_destination != "console":
+        response = ''
+        while response.lower() != 'y' or response.lower() != 'n':
+            response = input(f"The destination {output_destination} is not valid. Do you want to print the results to the console instead? (y/n)")
+        if response == "n":
+            print("Stopping execution...")
+            sys.exit()
+        else:
+            find_broken_links(search_url, recursive)
     else:
-        print("Console output not implemented yet")
+        find_broken_links(search_url, recursive)
 
 def main():
     parser = argparse.ArgumentParser(description="Crawls a page (or pages) to find broken links.")
