@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup
 """
 Validates the user's provided output file path. Returns true or false.
 """
-def validate_output_file(file_path: str):
+def validate_output_file(file_path: str) -> bool:
     SUPPORTED_FILE_EXTENSIONS = ['.txt']
     file_dir, file_name = os.path.split(file_path)
 
@@ -41,7 +41,7 @@ def validate_output_file(file_path: str):
 Performs necessary checks to see if a file with the provided path can be created.
 returns the result of an open(<path>, "a") if checks are successful.
 """
-def create_file(file_path: str):
+def create_file(file_path: str) -> io.IOBase:
     file_dir, _ = os.path.split(file_path)
     file = None
 
@@ -64,21 +64,43 @@ def create_file(file_path: str):
         return open(file_path, 'a')
 
 """
-Gets a list of pages within the domain that are linked on a page.
+Finds links on a page that are in the sub-domain of the url provided and returns any that are not
+already searched.
 """
-def get_child_pages(search_url, base_url):
-    print(f"get child pages called: {search_url}, {base_url}")
+def get_child_pages(search_url: str, searched: list) -> list:
+    print(f"get child pages called: {search_url} {searched}")
 
 """
-Gets all values in href properties from anchor tags.
+Looks for broken links on a page. Returns an array of broken links when finished.
 """
-def get_anchor_refs(search_url):
-    print(f"get_anchor_refs called: {search_url}")
+def test_links(url: str) -> list:
+    print(f"test_links called: {url}")
+    chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_argument('--headless')
+    driver = webdriver.Chrome(options=chrome_options)
+    driver.get(url)
+    page_source = driver.page_source
+    soup = BeautifulSoup(page_source, 'html.parser')
+
+    anchor_tags = soup.find_all('a')
+    href_count = 0
+    broken_count = 0
+    for anchor in anchor_tags:
+        href = anchor.get('href')
+        if href is None:
+            continue
+        response = requests.head(href)
+        if response.status_code != 200:
+            print(f'Broken link: {href} (Status code: {response.status_code})')
+            broken_count += 1
+        href_count += 1
+    driver.close()
+    print(f'Looked at {href_count} links and found {broken_count} broken')
 
 """
 Separates a https://<domain> from an endpoint in a url.
 """
-def url_separate(url):
+def url_separate(url: str) -> tuple:
     parsed_url = requests.utils.urlparse(url)
     scheme = parsed_url.scheme
     domain = parsed_url.netloc
@@ -91,38 +113,32 @@ def url_separate(url):
 """
 Finds all broken links on a page.
 """
-def find_broken_links(start_url: str, console: bool, output_file: io.IOBase = None):
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument('--headless')
-    driver = webdriver.Chrome(options=chrome_options)
-
+def find_broken_links(start_url: str, recursive: bool, output_file: io.IOBase = None) -> None:
     START_DOMAIN, start_endpoint = url_separate(start_url)
+    url_queue = []
+    url_queue.append(start_endpoint)
+    searched_urls = []
+    broken_refs = []
 
-    if console:
-        driver.get(start_url)
-        page_source = driver.page_source
-        soup = BeautifulSoup(page_source, 'html.parser')
+    while len(url_queue) > 0:
+        broken_refs += test_links(f"{START_DOMAIN}{url_queue[0]}")
+        if recursive:
+            url_queue += get_child_pages(f"{START_DOMAIN}{url_queue[0]}", searched_urls)
+        url_queue.pop(0)
 
-        anchor_tags = soup.find_all('a')
-        href_count = 0
-        broken_count = 0
-        for anchor in anchor_tags:
-            href = anchor.get('href')
-            if href is None:
-                continue
-            response = requests.head(href)
-            if response.status_code != 200:
-                print(f'Broken link: {href} (Status code: {response.status_code})')
-                broken_count += 1
-            href_count += 1
-        driver.close()
-        print(f'Looked at {href_count} links and found {broken_count} broken')
+        if output_file != None:
+            for link in broken_refs:
+                output_file.write(link)
+        else:
+            for link in broken_refs:
+                print(link)
+        broken_refs = []
 
 """
 Hub function for scraping the page/site provided. Should output to a file or console (depending
 on the arguments provided) one line at a time when broken links are found.
 """
-def scrape(search_url: str, output_destination:str, recursive:bool, exclude:str):
+def scrape(search_url: str, recursive: bool, exclude: str, output_destination: str = "console"):
     exclude_paths = exclude.split()
     if len(exclude_paths) > 0:
         print("Paths excluded from search:")
@@ -131,22 +147,29 @@ def scrape(search_url: str, output_destination:str, recursive:bool, exclude:str)
     else:
         print("Paths excluded from search: None")
 
-    valid_out_dest = validate_output_file(output_destination)
-    output_file = None
-    if output_destination != "console" and valid_out_dest:
-        output_file = create_file(output_destination)
-        find_broken_links(search_url, recursive, output_file)
-        output_file.close()
-    elif output_destination != "console":
-        response = ''
-        while response.lower() != 'y' or response.lower() != 'n':
-            response = input(f"The destination {output_destination} is not valid. Do you want to print the results to the console instead? (y/n)")
-        if response == "n":
-            print("Stopping execution...")
-            sys.exit()
+    if output_destination != "console":
+        # Check to see if the path provided is a valid file path.
+        valid_out_dest = validate_output_file(output_destination)
+        if valid_out_dest:
+            # Print to file destination if it is.
+            output_file = create_file(output_destination)
+            find_broken_links(search_url, recursive, output_file)
+            output_file.close()
         else:
-            find_broken_links(search_url, recursive)
+            # The output destination is invalid otherwise
+            response = ''
+            while response.lower() != 'y' or response.lower() != 'n':
+                # Check if the user wants to print to console instead.
+                response = input(f"The destination {output_destination} is not valid. Do you want to print to the console instead? (y/n)")
+            if response == 'n':
+                # Stop if they say no
+                print("Stopping execution")
+                sys.exit()
+            else:
+                # print to console if yes.
+                find_broken_links(search_url, recursive)
     else:
+        # A file destination was not provided. Print results to console.
         find_broken_links(search_url, recursive)
 
 def main():
@@ -165,15 +188,14 @@ def main():
     except SystemExit:
         parser.print_help()
         sys.exit()
-
-    output_dest = "console"
     exclude_paths = ""
-    if args.file:
-        output_dest = args.file
+    output_dest = args.file
     if args.exclude:
         exclude_paths = args.exclude
 
-    scrape(args.source_page, output_dest, args.recursive, exclude_paths)
+    if output_dest:
+        scrape(args.source_page, args.recursive, exclude_paths, output_dest)
+    else: scrape(args.source_page, args.recursive, exclude_paths)
 
 if __name__ == "__main__":
     main()
